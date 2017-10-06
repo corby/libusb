@@ -34,6 +34,7 @@ import (
 	"reflect"
 	"strings"
 	"unsafe"
+	"syscall"
 )
 
 //-----------------------------------------------------------------------------
@@ -49,7 +50,7 @@ func bcd2str(x uint16) string {
 
 func indent(s string) string {
 	x := strings.Split(s, "\n")
-	for i, _ := range x {
+	for i := range x {
 		x[i] = fmt.Sprintf("%s%s", "  ", x[i])
 	}
 	return strings.Join(x, "\n")
@@ -259,25 +260,6 @@ const (
 // Total number of error codes.
 const ERROR_COUNT = C.LIBUSB_ERROR_COUNT
 
-// Transfer status codes.
-const (
-	TRANSFER_COMPLETED = C.LIBUSB_TRANSFER_COMPLETED
-	TRANSFER_ERROR     = C.LIBUSB_TRANSFER_ERROR
-	TRANSFER_TIMED_OUT = C.LIBUSB_TRANSFER_TIMED_OUT
-	TRANSFER_CANCELLED = C.LIBUSB_TRANSFER_CANCELLED
-	TRANSFER_STALL     = C.LIBUSB_TRANSFER_STALL
-	TRANSFER_NO_DEVICE = C.LIBUSB_TRANSFER_NO_DEVICE
-	TRANSFER_OVERFLOW  = C.LIBUSB_TRANSFER_OVERFLOW
-)
-
-// Transfer.Flags values.
-const (
-	TRANSFER_SHORT_NOT_OK    = C.LIBUSB_TRANSFER_SHORT_NOT_OK
-	TRANSFER_FREE_BUFFER     = C.LIBUSB_TRANSFER_FREE_BUFFER
-	TRANSFER_FREE_TRANSFER   = C.LIBUSB_TRANSFER_FREE_TRANSFER
-	TRANSFER_ADD_ZERO_PACKET = C.LIBUSB_TRANSFER_ADD_ZERO_PACKET
-)
-
 // Capabilities supported by an instance of libusb on the current running platform.
 // Test if the loaded library supports a given capability by calling Has_Capability().
 const (
@@ -386,7 +368,7 @@ func c2go_Interface_Descriptor(x *C.struct_libusb_interface_descriptor) *Interfa
 	hdr.Len = int(x.bNumEndpoints)
 	hdr.Data = uintptr(unsafe.Pointer(x.endpoint))
 	endpoints := make([]*Endpoint_Descriptor, x.bNumEndpoints)
-	for i, _ := range endpoints {
+	for i := range endpoints {
 		endpoints[i] = c2go_Endpoint_Descriptor(&list[i])
 	}
 	return &Interface_Descriptor{
@@ -441,7 +423,7 @@ func c2go_Interface(x *C.struct_libusb_interface) *Interface {
 	hdr.Len = int(x.num_altsetting)
 	hdr.Data = uintptr(unsafe.Pointer(x.altsetting))
 	altsetting := make([]*Interface_Descriptor, x.num_altsetting)
-	for i, _ := range altsetting {
+	for i := range altsetting {
 		altsetting[i] = c2go_Interface_Descriptor(&list[i])
 	}
 	return &Interface{
@@ -488,7 +470,7 @@ func c2go_Config_Descriptor(x *C.struct_libusb_config_descriptor) *Config_Descri
 	hdr.Len = int(x.bNumInterfaces)
 	hdr.Data = uintptr(unsafe.Pointer(x._interface))
 	interfaces := make([]*Interface, x.bNumInterfaces)
-	for i, _ := range interfaces {
+	for i := range interfaces {
 		interfaces[i] = c2go_Interface(&list[i])
 	}
 	return &Config_Descriptor{
@@ -593,7 +575,7 @@ func c2go_BOS_Descriptor(x *C.struct_libusb_bos_descriptor) *BOS_Descriptor {
 	hdr.Len = int(x.bNumDeviceCaps)
 	hdr.Data = uintptr(unsafe.Pointer(C.dev_capability_ptr(x)))
 	dev_capability := make([]*BOS_Dev_Capability_Descriptor, x.bNumDeviceCaps)
-	for i, _ := range dev_capability {
+	for i := range dev_capability {
 		dev_capability[i] = c2go_BOS_Dev_Capability_Descriptor(list[i])
 	}
 	return &BOS_Descriptor{
@@ -1207,8 +1189,14 @@ func Get_String_Descriptor(hdl Device_Handle, desc_index uint8, langid uint16, d
 // void 	libusb_free_pollfds (const struct libusb_pollfd **pollfds)
 
 func Handle_Events_Completed(ctx Context) (int32, int32) {
-	var completed int32 = 0
-	var ret C.int = C.libusb_handle_events_completed(ctx,(*C.int)(&completed))
+	var completed C.int = 0
+	var ret C.int = C.libusb_handle_events_completed(ctx,&completed)
+	return int32(ret), int32(completed)
+}
+
+func Handle_Events_Timeout_Completed(ctx Context, tv syscall.Timeval) (int32, int32) {
+	var completed C.int = 0
+	var ret C.int = C.libusb_handle_events_timeout_completed(ctx,(*C.struct_timeval)(unsafe.Pointer(&tv)),&completed)
 	return int32(ret), int32(completed)
 }
 

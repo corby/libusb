@@ -11,6 +11,35 @@ import "fmt"
 import "sync"
 import "unsafe"
 
+// Transfer status codes.
+const (
+	TRANSFER_COMPLETED = C.LIBUSB_TRANSFER_COMPLETED
+	TRANSFER_ERROR     = C.LIBUSB_TRANSFER_ERROR
+	TRANSFER_TIMED_OUT = C.LIBUSB_TRANSFER_TIMED_OUT
+	TRANSFER_CANCELLED = C.LIBUSB_TRANSFER_CANCELLED
+	TRANSFER_STALL     = C.LIBUSB_TRANSFER_STALL
+	TRANSFER_NO_DEVICE = C.LIBUSB_TRANSFER_NO_DEVICE
+	TRANSFER_OVERFLOW  = C.LIBUSB_TRANSFER_OVERFLOW
+)
+
+// Transfer.Flags values.
+const (
+	TRANSFER_SHORT_NOT_OK    = C.LIBUSB_TRANSFER_SHORT_NOT_OK
+	TRANSFER_FREE_BUFFER     = C.LIBUSB_TRANSFER_FREE_BUFFER
+	TRANSFER_FREE_TRANSFER   = C.LIBUSB_TRANSFER_FREE_TRANSFER
+	TRANSFER_ADD_ZERO_PACKET = C.LIBUSB_TRANSFER_ADD_ZERO_PACKET
+)
+
+var _stat_msg map[byte]string = map[byte]string{
+	TRANSFER_COMPLETED: "TRANSFER_COMPLETED",
+	TRANSFER_ERROR:	 	"TRANSFER_ERROR",
+	TRANSFER_TIMED_OUT: "TRANSFER_TIMED_OUT",
+	TRANSFER_CANCELLED: "TRANSFER_CANCELLED",
+	TRANSFER_STALL: 	"TRANSFER_STALL",
+	TRANSFER_NO_DEVICE: "TRANSFER_NO_DEVICE",
+	TRANSFER_OVERFLOW: 	"TRANSFER_OVERFLOW",
+}
+
 // Internal stucture needed to keep track
 // of transfers from GO
 type t_transfer_map struct {
@@ -22,28 +51,28 @@ var _transfer_map t_transfer_map = t_transfer_map{
 	_map:  map[*C.struct_libusb_transfer]*Transfer{},
 }
 
-func (self *t_transfer_map)add(c_tr *C.struct_libusb_transfer, gotr *Transfer) {
-	self.Lock()
-	defer self.Unlock()
-	self._map[c_tr] = gotr
+func (tm *t_transfer_map)add(c_tr *C.struct_libusb_transfer, gotr *Transfer) {
+	tm.Lock()
+	defer tm.Unlock()
+	tm._map[c_tr] = gotr
 }
 
-func (self *t_transfer_map)del(tr *C.struct_libusb_transfer) {
-	self.Lock()
-	defer self.Unlock()
-	delete(self._map,tr)
+func (tm *t_transfer_map)del(tr *C.struct_libusb_transfer) {
+	tm.Lock()
+	defer tm.Unlock()
+	delete(tm._map,tr)
 }
 
-func (self *t_transfer_map)get(tr *C.struct_libusb_transfer) *Transfer {
-	self.Lock()
-	defer self.Unlock()
-	return self._map[tr]
+func (tm *t_transfer_map)get(tr *C.struct_libusb_transfer) *Transfer {
+	tm.Lock()
+	defer tm.Unlock()
+	return tm._map[tr]
 }
 
-func (self *t_transfer_map)has(tr *C.struct_libusb_transfer) bool {
-	self.Lock()
-	defer self.Unlock()
-	_, ok := self._map[tr]
+func (tm *t_transfer_map)has(tr *C.struct_libusb_transfer) bool {
+	tm.Lock()
+	defer tm.Unlock()
+	_, ok := tm._map[tr]
 	return ok
 }
 
@@ -81,30 +110,32 @@ type Transfer struct {
 	buffer			*[]byte
 }
 
-func (self *Transfer)GetHandle() Device_Handle { return self.handle }
-func (self *Transfer)GetFlags() uint8 { return uint8(self.ptr.flags) }
-func (self *Transfer)GetEndpoint() uint8 { return uint8(self.ptr.endpoint) }
-func (self *Transfer)GetType() uint8 { return uint8(self.ptr._type) }
-func (self *Transfer)GetTimeout() int { return int(self.ptr.timeout) }
-func (self *Transfer)GetStatus() uint8 { return uint8(self.ptr.status) }
-func (self *Transfer)GetLength() int { return int(self.ptr.length) }
-func (self *Transfer)GetActualLength() int { return int(self.ptr.actual_length) }
-func (self *Transfer)GetCallback() func(*Transfer) { return self.callback }
-func (self *Transfer)GetUserData() interface{} { return self.user_data }
-func (self *Transfer)GetBuffer() *[]byte { return self.buffer }
-func (self *Transfer)GetData() []byte {
-	tmp := make([]byte,self.GetActualLength())
-	copy(tmp,*self.buffer)
+func (tr *Transfer)GetPtr() *C.struct_libusb_transfer { return tr.ptr }
+func (tr *Transfer)GetHandle() Device_Handle          { return tr.handle }
+func (tr *Transfer)GetFlags() uint8                   { return uint8(tr.ptr.flags) }
+func (tr *Transfer)GetEndpoint() uint8                { return uint8(tr.ptr.endpoint) }
+func (tr *Transfer)GetType() uint8                    { return uint8(tr.ptr._type) }
+func (tr *Transfer)GetTimeout() int                   { return int(tr.ptr.timeout) }
+func (tr *Transfer)GetStatus() uint8                  { return uint8(tr.ptr.status) }
+func (tr *Transfer)GetStatusStr() string              { return _stat_msg[tr.GetStatus()] }
+func (tr *Transfer)GetLength() int                    { return int(tr.ptr.length) }
+func (tr *Transfer)GetActualLength() int              { return int(tr.ptr.actual_length) }
+func (tr *Transfer)GetCallback() func(*Transfer)      { return tr.callback }
+func (tr *Transfer)GetUserData() interface{}          { return tr.user_data }
+func (tr *Transfer)GetBuffer() *[]byte                { return tr.buffer }
+func (tr *Transfer)GetData() []byte {
+	tmp := make([]byte, tr.GetActualLength())
+	copy(tmp,*tr.buffer)
 	return tmp
-	//return (*self.buffer)[:self.GetActualLength()]
+	//return (*tr.buffer)[:tr.GetActualLength()]
 }
 
-func (self *Transfer)SetCallback(cb func(*Transfer)) {
-	self.callback = cb
+func (tr *Transfer)SetCallback(cb func(*Transfer)) {
+	tr.callback = cb
 }
 
-func (self *Transfer)SetUserData(user_data interface{}) {
-	self.user_data = user_data
+func (tr *Transfer)SetUserData(user_data interface{}) {
+	tr.user_data = user_data
 }
 
 func c2go_Transfer(x *C.struct_libusb_transfer) *Transfer {
@@ -201,19 +232,19 @@ func transfer_cb_fn(tr *C.struct_libusb_transfer) {
 	transfer.callback(transfer)
 }
 
-func (self *Transfer)Fill_Bulk(hdl Device_Handle, endpoint uint8,
+func (tr *Transfer)Fill_Bulk(hdl Device_Handle, endpoint uint8,
 	data []byte, timeout uint) error {
 
 	// At this point the transfer object must already be in the transfer map
-	if !_transfer_map.has(self.ptr) {
+	if !_transfer_map.has(tr.ptr) {
 		return fmt.Errorf("Transfer not allocated. Please call Alloc_Transfer first.")
 	}
 
-	self.handle = hdl
-	self.buffer = &data
+	tr.handle = hdl
+	tr.buffer = &data
 
 	C.libusb_fill_bulk_transfer(
-		self.ptr, hdl, C.uchar(endpoint), (*C.uchar)(&data[0]), C.int(len(data)),
+		tr.ptr, hdl, C.uchar(endpoint), (*C.uchar)(&data[0]), C.int(len(data)),
 		C.libusb_transfer_cb_fn(unsafe.Pointer(C.cgo_transfer_cb_fn)),
 		nil, C.uint(timeout),
 	)
