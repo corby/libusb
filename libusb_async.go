@@ -7,9 +7,11 @@ extern void cgo_transfer_cb_fn(struct libusb_transfer* transfer);
 */
 import "C"
 
-import "fmt"
-import "sync"
-import "unsafe"
+import (
+	"fmt"
+	"sync"
+	"unsafe"
+)
 
 // Transfer status codes.
 const (
@@ -43,36 +45,28 @@ var _stat_msg map[byte]string = map[byte]string{
 // Internal stucture needed to keep track
 // of transfers from GO
 type t_transfer_map struct {
-	sync.Mutex
-	_map map[*C.struct_libusb_transfer]*Transfer
+	sync.Map
 }
 
-var _transfer_map t_transfer_map = t_transfer_map{
-	_map:  map[*C.struct_libusb_transfer]*Transfer{},
-}
+var _transfer_map t_transfer_map = t_transfer_map{}
 
-func (tm *t_transfer_map)add(c_tr *C.struct_libusb_transfer, gotr *Transfer) {
-	tm.Lock()
-	defer tm.Unlock()
-	tm._map[c_tr] = gotr
+func (tm *t_transfer_map)add(tr *C.struct_libusb_transfer, gotr *Transfer) {
+	tm.Map.Store(tr,gotr)
 }
 
 func (tm *t_transfer_map)del(tr *C.struct_libusb_transfer) {
-	tm.Lock()
-	defer tm.Unlock()
-	delete(tm._map,tr)
+	tm.Map.Delete(tr)
 }
 
 func (tm *t_transfer_map)get(tr *C.struct_libusb_transfer) *Transfer {
-	tm.Lock()
-	defer tm.Unlock()
-	return tm._map[tr]
+	if tmp, ok := tm.Map.Load(tr); ok {
+		return tmp.(*Transfer)
+	}
+	return nil
 }
 
 func (tm *t_transfer_map)has(tr *C.struct_libusb_transfer) bool {
-	tm.Lock()
-	defer tm.Unlock()
-	_, ok := tm._map[tr]
+	_, ok := tm.Map.Load(tr)
 	return ok
 }
 
@@ -130,6 +124,10 @@ func (tr *Transfer)GetData() []byte {
 	//return (*tr.buffer)[:tr.GetActualLength()]
 }
 
+func (tr *Transfer)SetFlags(flags uint8) {
+	tr.ptr.flags = (C.uint8_t)(flags)
+}
+
 func (tr *Transfer)SetCallback(cb func(*Transfer)) {
 	tr.callback = cb
 }
@@ -137,16 +135,16 @@ func (tr *Transfer)SetCallback(cb func(*Transfer)) {
 func (tr *Transfer)SetUserData(user_data interface{}) {
 	tr.user_data = user_data
 }
-
-func c2go_Transfer(x *C.struct_libusb_transfer) *Transfer {
-	transfer := _transfer_map.get(x)
-	if transfer.ptr != x { panic("no ptr match") }
-	return transfer
-}
-
-func go2c_Transfer(x *Transfer) *C.struct_libusb_transfer {
-	return x.ptr
-}
+//
+//func c2go_Transfer(x *C.struct_libusb_transfer) *Transfer {
+//	transfer := _transfer_map.get(x)
+//	if transfer == nil || transfer.ptr != x { return nil }
+//	return transfer
+//}
+//
+//func go2c_Transfer(x *Transfer) *C.struct_libusb_transfer {
+//	return x.ptr
+//}
 
 //-----------------------------------------------------------------------------
 // static struct libusb_control_setup * 	libusb_control_transfer_get_setup (struct libusb_transfer *transfer)
@@ -180,16 +178,16 @@ func Free_Streams(dev Device_Handle, endpoints []byte) error {
 }
 
 func Transfer_Set_Stream_ID(transfer *Transfer, stream_id uint32) {
-	C.libusb_transfer_set_stream_id(go2c_Transfer(transfer), (C.uint32_t)(stream_id))
+	C.libusb_transfer_set_stream_id(transfer.ptr, (C.uint32_t)(stream_id))
 }
 
 func Transfer_Get_Stream_ID(transfer *Transfer) uint32 {
-	return uint32(C.libusb_transfer_get_stream_id(go2c_Transfer(transfer)))
+	return uint32(C.libusb_transfer_get_stream_id(transfer.ptr))
 }
 
 func Control_Transfer_Get_Data(transfer *Transfer) *byte {
   // should this return a slice? - what's the length?
-	return (*byte)(C.libusb_control_transfer_get_data(go2c_Transfer(transfer)))
+	return (*byte)(C.libusb_control_transfer_get_data(transfer.ptr))
 }
 
 func Alloc_Transfer(iso_packets int) (*Transfer, error) {
@@ -204,21 +202,22 @@ func Alloc_Transfer(iso_packets int) (*Transfer, error) {
 	return transfer, nil
 }
 
-func Free_Transfer(transfer *Transfer) {
-	_transfer_map.del(transfer.ptr)
-	C.libusb_free_transfer(transfer.ptr)
+func (tr *Transfer)Free() {
+	_transfer_map.del(tr.ptr)
+	C.libusb_free_transfer(tr.ptr)
 }
 
-func Submit_Transfer(transfer *Transfer) error {
-	rc := int(C.libusb_submit_transfer(go2c_Transfer(transfer)))
+func (tr *Transfer)Submit() error {
+	rc := int(C.libusb_submit_transfer(tr.ptr))
 	if rc != 0 {
 		return &libusb_error{rc}
 	}
 	return nil
 }
 
-func Cancel_Transfer(transfer *Transfer) error {
-	rc := int(C.libusb_cancel_transfer(go2c_Transfer(transfer)))
+func (tr *Transfer)Cancel() error {
+	_transfer_map.del(tr.ptr)
+	rc := int(C.libusb_cancel_transfer(tr.ptr))
 	if rc != 0 {
 		return &libusb_error{rc}
 	}
@@ -228,8 +227,16 @@ func Cancel_Transfer(transfer *Transfer) error {
 
 //export transfer_cb_fn
 func transfer_cb_fn(tr *C.struct_libusb_transfer) {
-	transfer := c2go_Transfer(tr)
-	transfer.callback(transfer)
+	transfer := _transfer_map.get(tr)
+	if transfer == nil || transfer.ptr != tr {
+		// Looks like a transfer was canceled in progress.
+		// NOTE: It's your responsibility to ensure that the transfer
+		// struct was freed properly.
+		return
+	}
+	if transfer.callback != nil {
+		transfer.callback(transfer)
+	}
 }
 
 func (tr *Transfer)Fill_Bulk(hdl Device_Handle, endpoint uint8,
