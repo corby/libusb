@@ -3,7 +3,9 @@ This is a fork of deadsys libusb library wrpaper.(https://godoc.org/github.com/d
 # libusb
 golang wrapper for libusb-1.0
 
-The API for libusb has been mapped 1-1 to equivalent go functions and types.
+The API for libusb has been mapped 1-1 to equivalent go functions and types
+except for the async functions.  Due to how GOC interacts with native libraries
+an additional layer had to be added to deal with callbacks and buffer handling.
 
 See http://libusb.info/ for more information on the C-API
 
@@ -13,7 +15,7 @@ Example:
 
 Somewhere in your code add a thread that does the listening:
 
-```
+```go
 func usb_listen(done chan struct{}) {
 
 	// Loop forever to keep reading
@@ -31,7 +33,7 @@ func usb_listen(done chan struct{}) {
 ```
 
 Then add the functions to pull data from the device:
-```
+```go
 func (dev *UBSObj)read_callback(transfer *libusb.Transfer) {
     data := transfer.GetData()
 
@@ -75,7 +77,7 @@ func (dev *USBObj)read_usb() error {
 }
 ```
 
-NOTE: you can call read_usb everytime you want to tread, or you can have the
+NOTE: you can call read_usb everytime you want to read, or you can have the
 callback autoloop for you, resubmitting the transfer on each packet received.
 
 For writes just change the ep_read value to the write value.
